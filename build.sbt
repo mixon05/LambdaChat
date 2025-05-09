@@ -6,11 +6,10 @@ ThisBuild / scalaVersion := "3.3.5"
 lazy val server = (project in file("server"))
   .settings(
     libraryDependencies ++= Seq(
-      "dev.zio" %% "zio" % "2.1.17",
-      "dev.zio" %% "zio-json" % "0.7.42",
-      "dev.zio" %% "zio-http" % "3.2.0",
-      "ch.qos.logback" % "logback-classic" % "1.5.18",
-      "dev.zio" %% "zio-logging-slf4j2" % "2.5.0"
+      "dev.zio"               %% "zio"                % "2.1.17",
+      "dev.zio"               %% "zio-json"           % "0.7.42",
+      "dev.zio"               %% "zio-http"           % "3.2.0",
+      "org.mongodb"           %  "mongodb-driver-bom" % "5.4.0",
     )
   )
 lazy val webapp = (project in file("webapp"))
