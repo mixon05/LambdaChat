@@ -47,3 +47,5 @@ build/
 .bsp/
 
 node_modules/
+
+server/src/main/resources/application.conf
