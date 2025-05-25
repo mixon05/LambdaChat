@@ -11,6 +11,7 @@ lazy val server = (project in file("server"))
       "dev.zio"               %% "zio-http"            % "3.3.0",
       "com.typesafe"          %  "config"              % "1.4.3",
       "org.mongodb"           %  "mongodb-driver-sync" % "5.5.0",
+      "com.github.jwt-scala"  %% "jwt-core"            % "10.0.4"
     ),
   )
 lazy val webapp = (project in file("webapp"))
