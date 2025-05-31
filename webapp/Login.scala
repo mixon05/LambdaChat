@@ -3,6 +3,8 @@ package webapp
 import com.raquo.laminar.api.L.{*, given}
 import org.scalajs.dom
 import org.scalajs.dom.ext.Ajax
+import scala.scalajs.js
+import scala.scalajs.js.JSON
 import scala.concurrent.ExecutionContext.Implicits.global
 
 object Login:
@@ -13,7 +15,6 @@ object Login:
     val password = Var("")
     val message  = Var("")
 
-    // ✅ Redirect if already logged in
     if dom.window.localStorage.getItem("username") != null then
       dom.window.location.href = "/"
 
@@ -31,15 +32,21 @@ object Login:
         headers = Map("Content-Type" -> "application/json")
       ).map { xhr =>
         if xhr.status == 200 then
-          // ✅ save to localStorage and redirect
+          val responseJson = JSON.parse(xhr.responseText).asInstanceOf[js.Dynamic]
+          val token = responseJson.token.asInstanceOf[String]
+          val userId = responseJson.userId.asInstanceOf[String]
+
           dom.window.localStorage.setItem("username", user)
+          dom.window.localStorage.setItem("token", token)
+          dom.window.localStorage.setItem("userId", userId)
+
           dom.window.location.href = "/"
         else if xhr.status == 401 then
-          message.set("❌ Unauthorized: Wrong username or password")
+          message.set("Unauthorized: Wrong username or password")
         else
-          message.set(s"❌ Server error (${xhr.status})")
+          message.set(s"Server error (${xhr.status})")
       }.recover {
-        case _ => message.set("❌ Network error")
+        case _ => message.set("Network error")
       }
 
     div(

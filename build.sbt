@@ -26,6 +26,7 @@ lazy val webapp = (project in file("webapp"))
     libraryDependencies ++= Seq(
       "org.scala-js" %%% "scalajs-dom" % "2.8.0",
       "com.raquo" %%% "laminar" % "17.0.0",
+      "com.lihaoyi" %%% "upickle" % "3.2.0"
     )
   )
 

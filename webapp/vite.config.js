@@ -6,4 +6,7 @@ export default defineConfig({
         cwd: '..',
         })
     ],
+    server: {
+        historyApiFallback: true
+    }
 });

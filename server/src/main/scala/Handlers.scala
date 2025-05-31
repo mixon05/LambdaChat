@@ -15,12 +15,14 @@ object Handlers {
     Method.GET / "hello" ->
       handler(Response.text("Hello, World!")),
 
-    Method.POST / "login" -> handler { (req: Request) =>
+    Method.POST / "login" -> Handler.fromFunctionZIO[Request] {  req =>
       (for {
         body       <- req.body.asString
+        _          <- Console.printLine(s"Login body: $body")
         userLogin  <- ZIO.fromEither(body.fromJson[UserRegistration])
         hashedPassword = Utils.hash(userLogin.password)
-        userOpt    <- MongoModule.Service.loginUser(userLogin.username, hashedPassword)
+        mongo      <- ZIO.service[MongoModule.Service]
+        userOpt    <- mongo.loginUser(userLogin.username, hashedPassword)
         response   <- userOpt match {
           case Some(user) =>
             val token = Utils.generateToken(user.id, user.username)
@@ -30,14 +32,16 @@ object Handlers {
         }
       } yield response)
         .catchAll { error =>
-          ZIO.succeed(Response.status(Status.BadRequest))
+          Console.printLineError(s"[LOGIN ERROR] ${error.toString}") *>
+            ZIO.succeed(Response.status(Status.BadRequest))
         }
-    },
+    }.mapError(_ => Response.status(Status.BadRequest)),
 
-    Method.POST / "register" -> handler { (req: Request) =>
+    Method.POST / "register" -> Handler.fromFunctionZIO[Request] {  req =>
       (for {
         body       <- req.body.asString
         userLogin  <- ZIO.fromEither(body.fromJson[UserRegistration])
+        userPassword = userLogin.password
         hashedPassword = Utils.hash(userLogin.password)
         userIdOpt  <- MongoModule.Service.registerUser(userLogin.username, hashedPassword)
         response   <- userIdOpt match {
@@ -47,11 +51,11 @@ object Handlers {
           case None =>
             ZIO.succeed(Response.text("User already exists").status(Status.Conflict))
         }
-      } yield response)
-        .catchAll { error =>
+      } yield response).catchAll { error =>
+        Console.printLineError(s"[REGISTER ERROR] ${error.toString}") *>
           ZIO.succeed(Response.status(Status.BadRequest))
-        }
-    },
+      }
+    }.mapError(_ => Response.status(Status.BadRequest)),
 
     Method.GET / "users" / "search" -> handler { (req: Request) =>
       extractBearerToken(req).flatMap(Utils.verifyToken) match {
