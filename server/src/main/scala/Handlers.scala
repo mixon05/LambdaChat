@@ -18,7 +18,6 @@ object Handlers {
     Method.POST / "login" -> Handler.fromFunctionZIO[Request] {  req =>
       (for {
         body       <- req.body.asString
-        _          <- Console.printLine(s"Login body: $body")
         userLogin  <- ZIO.fromEither(body.fromJson[UserRegistration])
         hashedPassword = Utils.hash(userLogin.password)
         mongo      <- ZIO.service[MongoModule.Service]
@@ -32,7 +31,6 @@ object Handlers {
         }
       } yield response)
         .catchAll { error =>
-          Console.printLineError(s"[LOGIN ERROR] ${error.toString}") *>
             ZIO.succeed(Response.status(Status.BadRequest))
         }
     }.mapError(_ => Response.status(Status.BadRequest)),
@@ -52,7 +50,6 @@ object Handlers {
             ZIO.succeed(Response.text("User already exists").status(Status.Conflict))
         }
       } yield response).catchAll { error =>
-        Console.printLineError(s"[REGISTER ERROR] ${error.toString}") *>
           ZIO.succeed(Response.status(Status.BadRequest))
       }
     }.mapError(_ => Response.status(Status.BadRequest)),

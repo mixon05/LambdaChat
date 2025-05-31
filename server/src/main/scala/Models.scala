@@ -28,7 +28,8 @@ object Message {
 
 case class Chat(
                  id: String,
-                 userIds: List[String]
+                 userIds: List[String],
+                 users: List[User]
                )
 object Chat {
   implicit val codec: JsonCodec[Chat] = DeriveJsonCodec.gen[Chat]
@@ -47,7 +48,7 @@ object CreateChatRequest {
   implicit val codec: JsonCodec[CreateChatRequest] = DeriveJsonCodec.gen[CreateChatRequest]
 }
 
-case class SendMessageRequest(chatId: String, senderId: String, value: String)
+case class SendMessageRequest(chatId: String, value: String)
 object SendMessageRequest {
   implicit val codec: JsonCodec[SendMessageRequest] = DeriveJsonCodec.gen[SendMessageRequest]
 }

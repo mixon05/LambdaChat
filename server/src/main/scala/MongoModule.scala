@@ -1,6 +1,6 @@
 import com.mongodb.{ConnectionString, MongoClientSettings, ServerApi, ServerApiVersion}
 import com.mongodb.client.{MongoClient, MongoClients, MongoCollection}
-import com.mongodb.client.model.{Filters, Sorts}
+import com.mongodb.client.model.{Aggregates, Filters, Sorts}
 import org.bson.Document
 import org.bson.types.ObjectId
 import zio._
@@ -21,6 +21,7 @@ object MongoModule {
     def sendMessage(chatId: String, senderId: String, value: String): Task[String]
     def getChatWithMessages(chatId: String): Task[ChatWithMessages]
     def getChat(chatId: String): Task[Chat]
+    def getUsersByIds(userIds: List[String]): Task[List[User]]
   }
 
   object Service {
@@ -53,6 +54,9 @@ object MongoModule {
 
     def getChat(chatId: String): ZIO[Service, Throwable, Chat] =
       ZIO.serviceWithZIO[Service](_.getChat(chatId))
+
+    def getUsersByIds(userIds: List[String]): ZIO[Service, Throwable, List[User]] =
+      ZIO.serviceWithZIO[Service](_.getUsersByIds(userIds))
   }
 
   private final case class Live(client: MongoClient) extends Service {
@@ -108,14 +112,34 @@ object MongoModule {
     }
 
     def getUserChats(userId: String): Task[List[Chat]] = ZIO.attempt {
-      val filter = Filters.in("userIds", userId)
+      val pipeline = List(
+        Aggregates.`match`(Filters.in("userIds", userId)),
 
-      chatsCollection.find(filter)
+        Aggregates.lookup(
+          "users",
+          "userIds",
+          "_id",
+          "users"
+        )
+      ).asJava
+
+      chatsCollection.aggregate(pipeline)
         .asScala
         .map { doc =>
+          val userIds = doc.getList("userIds", classOf[String]).asScala.toList
+          val userDocs = doc.getList("users", classOf[Document]).asScala.toList
+
+          val users = userDocs.map { userDoc =>
+            User(
+              id = userDoc.getObjectId("_id").toString,
+              username = userDoc.getString("name")
+            )
+          }
+
           Chat(
             id = doc.getObjectId("_id").toString,
-            userIds = doc.getList("userIds", classOf[String]).asScala.toList
+            userIds = userIds,
+            users = users
           )
         }
         .toList
@@ -162,13 +186,54 @@ object MongoModule {
       doc.getObjectId("_id").toString
     }
 
+    def getUsersByIds(userIds: List[String]): Task[List[User]] = ZIO.attempt {
+      if (userIds.isEmpty) {
+        List.empty
+      } else {
+        val objectIds = userIds.map(new ObjectId(_))
+        val filter = Filters.in("_id", objectIds.asJava)
+
+        usersCollection.find(filter)
+          .asScala
+          .map { doc =>
+            User(
+              id = doc.getObjectId("_id").toString,
+              username = doc.getString("name")
+            )
+          }
+          .toList
+      }
+    }
+
     def getChat(chatId: String): Task[Chat] = ZIO.attempt {
-      val filter = Filters.eq("_id", new ObjectId(chatId))
-      val doc = chatsCollection.find(filter).first()
-      if (doc != null) {
+      val pipeline = List(
+        Aggregates.`match`(Filters.eq("_id", new ObjectId(chatId))),
+
+        Aggregates.lookup(
+          "users",
+          "userIds",
+          "_id",
+          "users"
+        )
+      ).asJava
+
+      val result = chatsCollection.aggregate(pipeline).first()
+
+      if (result != null) {
+        val userIds = result.getList("userIds", classOf[String]).asScala.toList
+        val userDocs = result.getList("users", classOf[Document]).asScala.toList
+
+        val users = userDocs.map { userDoc =>
+          User(
+            id = userDoc.getObjectId("_id").toString,
+            username = userDoc.getString("name")
+          )
+        }
+
         Chat(
-          id = doc.getObjectId("_id").toString,
-          userIds = doc.getList("userIds", classOf[String]).asScala.toList
+          id = result.getObjectId("_id").toString,
+          userIds = userIds,
+          users = users
         )
       } else {
         throw new Exception("Chat not found")
