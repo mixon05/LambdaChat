@@ -38,6 +38,8 @@ object ChatPage:
             messageStatus.set(s"Server error: ${xhr.status}")
         }.recover { case _ => messageStatus.set("Network error") }
 
+    fetchMessages();
+
     def sendMessage(): Unit =
       val token = dom.window.localStorage.getItem("token")
       val senderId = dom.window.localStorage.getItem("userId")
@@ -66,7 +68,7 @@ object ChatPage:
           case _ => messageStatus.set("Network error")
         }
 
-    onMountCallback(_ => fetchMessages())
+    //onMountCallback(_ => fetchMessages())
 
     div(
       h2(s"Chat: $chatId"),
