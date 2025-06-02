@@ -11,163 +11,159 @@ object Handlers {
     }
   }
 
+  private def withAuth[R, E](req: Request)(
+    action: (String, String) => ZIO[R, E, Response]
+  ): ZIO[R, E, Response] = {
+    extractBearerToken(req).flatMap(Utils.verifyToken) match {
+      case Some((userId, username)) => action(userId, username)
+      case None => ZIO.succeed(Response.text("Unauthorized").status(Status.Unauthorized))
+    }
+  }
+
+  private def parseBody[A: JsonDecoder](req: Request): ZIO[Any, Throwable, A] = {
+    for {
+      body <- req.body.asString
+      parsed <- ZIO.fromEither(body.fromJson[A]).mapError(new Exception(_))
+    } yield parsed
+  }
+
+  private def checkChatAccess(chat: Chat, userId: String): ZIO[Any, Throwable, Unit] = {
+    if (chat.userIds.contains(userId)) ZIO.unit
+    else ZIO.fail(new Exception("Forbidden"))
+  }
+
+  private def handleError(error: Throwable): Response =
+    Response.text(error.getMessage).status(Status.BadRequest)
+
+  private def handleForbiddenError(error: Throwable): Response =
+    Response.text("Forbidden").status(Status.Forbidden)
+
+  private def handleNotFoundError(error: Throwable): Response =
+    Response.status(Status.NotFound)
+
+  private def getQueryParam(req: Request, name: String): Option[String] =
+    req.url.queryParams.getAll(name).headOption
+
+  private def getIntQueryParam(req: Request, name: String, default: Int): Int =
+    getQueryParam(req, name).flatMap(_.toIntOption).getOrElse(default)
+
+  private def jsonResponse[A: JsonEncoder](data: A): ZIO[Any, Throwable, Response] =
+    ZIO.attempt(Response.json(data.toJson))
+
+  private def createAuthResponse(userId: String, username: String): ZIO[Any, Throwable, Response] = {
+    val token = Utils.generateToken(userId, username)
+    jsonResponse(AuthResponse(token, userId, username))
+  }
+
+  private def checkUserAccess(requestedUserId: String, authUserId: String): ZIO[Any, Throwable, Unit] = {
+    if (requestedUserId == authUserId) ZIO.unit
+    else ZIO.fail(new Exception("Forbidden"))
+  }
+
   val routes: Routes[MongoModule.Service, Response] = Routes(
     Method.GET / "hello" ->
       handler(Response.text("Hello, World!")),
 
     Method.POST / "login" -> Handler.fromFunctionZIO[Request] {  req =>
       (for {
-        body       <- req.body.asString
-        userLogin  <- ZIO.fromEither(body.fromJson[UserRegistration])
+        userLogin  <- parseBody[UserRegistration](req)
         hashedPassword = Utils.hash(userLogin.password)
         mongo      <- ZIO.service[MongoModule.Service]
         userOpt    <- mongo.loginUser(userLogin.username, hashedPassword)
         response   <- userOpt match {
-          case Some(user) =>
-            val token = Utils.generateToken(user.id, user.username)
-            ZIO.succeed(Response.json(AuthResponse(token, user.id, user.username).toJson))
-          case None =>
-            ZIO.succeed(Response.text("Invalid credentials").status(Status.Unauthorized))
+          case Some(user) => createAuthResponse(user.id, user.username)
+          case None => ZIO.succeed(Response.text("Invalid credentials").status(Status.Unauthorized))
         }
       } yield response)
-        .catchAll { error =>
-            ZIO.succeed(Response.status(Status.BadRequest))
-        }
+        .catchAll(error => ZIO.succeed(Response.status(Status.BadRequest)))
     }.mapError(_ => Response.status(Status.BadRequest)),
 
     Method.POST / "register" -> Handler.fromFunctionZIO[Request] {  req =>
       (for {
-        body       <- req.body.asString
-        userLogin  <- ZIO.fromEither(body.fromJson[UserRegistration])
-        userPassword = userLogin.password
+        userLogin  <- parseBody[UserRegistration](req)
         hashedPassword = Utils.hash(userLogin.password)
         userIdOpt  <- MongoModule.Service.registerUser(userLogin.username, hashedPassword)
         response   <- userIdOpt match {
-          case Some(userId) =>
-            val token = Utils.generateToken(userId, userLogin.username)
-            ZIO.succeed(Response.json(AuthResponse(token, userId, userLogin.username).toJson))
-          case None =>
-            ZIO.succeed(Response.text("User already exists").status(Status.Conflict))
+          case Some(userId) => createAuthResponse(userId, userLogin.username)
+          case None => ZIO.succeed(Response.text("User already exists").status(Status.Conflict))
         }
-      } yield response).catchAll { error =>
-          ZIO.succeed(Response.status(Status.BadRequest))
-      }
+      } yield response)
+        .catchAll(error => ZIO.succeed(Response.status(Status.BadRequest)))
     }.mapError(_ => Response.status(Status.BadRequest)),
 
     Method.GET / "users" / "search" -> handler { (req: Request) =>
-      extractBearerToken(req).flatMap(Utils.verifyToken) match {
-        case Some((userId, username)) =>
-          (for {
-            query <- ZIO.fromOption(req.url.queryParams.getAll("q").headOption)
-              .orElseFail(new Exception("Query parameter 'q' is required"))
-            users <- MongoModule.Service.searchUsers(query)
-            json  <- ZIO.attempt(users.toJson)
-          } yield Response.json(json))
-            .catchAll { error =>
-              ZIO.succeed(Response.text(error.getMessage).status(Status.BadRequest))
-            }
-        case None =>
-          ZIO.succeed(Response.text("Unauthorized").status(Status.Unauthorized))
+      withAuth(req) { (userId, username) =>
+        (for {
+          query <- ZIO.fromOption(getQueryParam(req, "q"))
+            .orElseFail(new Exception("Query parameter 'q' is required"))
+          users <- MongoModule.Service.searchUsers(query)
+          response <- jsonResponse(users)
+        } yield response)
+          .catchAll(error => ZIO.succeed(handleError(error)))
       }
     },
 
     Method.GET / "users" / string("userId") / "chats" ->
       handler { (userId: String, req: Request) =>
-        extractBearerToken(req).flatMap(Utils.verifyToken) match {
-          case Some((authUserId, authUsername)) =>
-            if (userId != authUserId) {
-              ZIO.succeed(Response.text("Forbidden").status(Status.Forbidden))
-            } else {
-              (for {
-                chats <- MongoModule.Service.getUserChats(userId)
-                json  <- ZIO.attempt(chats.toJson)
-              } yield Response.json(json))
-                .catchAll { error =>
-                  ZIO.succeed(Response.status(Status.InternalServerError))
-                }
-            }
-          case None =>
-            ZIO.succeed(Response.text("Unauthorized").status(Status.Unauthorized))
+        withAuth(req) { (authUserId, authUsername) =>
+          (for {
+            _ <- checkUserAccess(userId, authUserId)
+            chats <- MongoModule.Service.getUserChats(userId)
+            response <- jsonResponse(chats)
+          } yield response)
+            .catchAll(error => ZIO.succeed(handleForbiddenError(error)))
         }
       },
 
     Method.GET / "chats" / string("chatId") / "messages" ->
       handler { (chatId: String, req: Request) =>
-        extractBearerToken(req).flatMap(Utils.verifyToken) match {
-          case Some((userId, username)) =>
-            (for {
-              chat <- MongoModule.Service.getChat(chatId)
-              _ <- if (chat.userIds.contains(userId)) ZIO.unit
-              else ZIO.fail(new Exception("Forbidden"))
-              limit  <- ZIO.succeed(req.url.queryParams.getAll("limit").headOption.flatMap(_.toIntOption).getOrElse(50))
-              offset <- ZIO.succeed(req.url.queryParams.getAll("offset").headOption.flatMap(_.toIntOption).getOrElse(0))
-              messages <- MongoModule.Service.getChatMessages(chatId, limit, offset)
-              json     <- ZIO.attempt(messages.toJson)
-            } yield Response.json(json))
-              .catchAll {
-                case _: Exception => ZIO.succeed(Response.text("Forbidden").status(Status.Forbidden))
-                case _ => ZIO.succeed(Response.status(Status.InternalServerError))
-              }
-          case None =>
-            ZIO.succeed(Response.text("Unauthorized").status(Status.Unauthorized))
+        withAuth(req) { (userId, username) =>
+          (for {
+            chat <- MongoModule.Service.getChat(chatId)
+            _ <- checkChatAccess(chat, userId)
+            limit = getIntQueryParam(req, "limit", 50)
+            offset = getIntQueryParam(req, "offset", 0)
+            messages <- MongoModule.Service.getChatMessages(chatId, limit, offset)
+            response <- jsonResponse(messages)
+          } yield response)
+            .catchAll(error => ZIO.succeed(handleForbiddenError(error)))
         }
       },
 
     Method.POST / "chats" -> handler { (req: Request) =>
-      extractBearerToken(req).flatMap(Utils.verifyToken) match {
-        case Some((userId, username)) =>
-          (for {
-            body    <- req.body.asString
-            request <- ZIO.fromEither(body.fromJson[CreateChatRequest])
-            userIds = if (request.userIds.contains(userId)) request.userIds else userId :: request.userIds
-            chatId  <- MongoModule.Service.createChat(userIds)
-            json    <- ZIO.attempt(Map("chatId" -> chatId).toJson)
-          } yield Response.json(json))
-            .catchAll { error =>
-              ZIO.succeed(Response.status(Status.BadRequest))
-            }
-        case None =>
-          ZIO.succeed(Response.text("Unauthorized").status(Status.Unauthorized))
+      withAuth(req) { (userId, username) =>
+        (for {
+          request <- parseBody[CreateChatRequest](req)
+          userIds = if (request.userIds.contains(userId)) request.userIds else userId :: request.userIds
+          chatId  <- MongoModule.Service.createChat(userIds)
+          response <- jsonResponse(Map("chatId" -> chatId))
+        } yield response)
+          .catchAll(error => ZIO.succeed(Response.status(Status.BadRequest)))
       }
     },
 
     Method.POST / "messages" -> handler { (req: Request) =>
-      extractBearerToken(req).flatMap(Utils.verifyToken) match {
-        case Some((userId, username)) =>
-          (for {
-            body    <- req.body.asString
-            request <- ZIO.fromEither(body.fromJson[SendMessageRequest])
-            chat <- MongoModule.Service.getChat(request.chatId)
-            _ <- if (chat.userIds.contains(userId)) ZIO.unit
-            else ZIO.fail(new Exception("Forbidden"))
-            messageId <- MongoModule.Service.sendMessage(request.chatId, userId, request.value)
-            json      <- ZIO.attempt(Map("messageId" -> messageId).toJson)
-          } yield Response.json(json))
-            .catchAll {
-              case _: Exception => ZIO.succeed(Response.text("Forbidden").status(Status.Forbidden))
-              case _ => ZIO.succeed(Response.status(Status.BadRequest))
-            }
-        case None =>
-          ZIO.succeed(Response.text("Unauthorized").status(Status.Unauthorized))
+      withAuth(req) { (userId, username) =>
+        (for {
+          request <- parseBody[SendMessageRequest](req)
+          chat <- MongoModule.Service.getChat(request.chatId)
+          _ <- checkChatAccess(chat, userId)
+          messageId <- MongoModule.Service.sendMessage(request.chatId, userId, request.value)
+          response <- jsonResponse(Map("messageId" -> messageId))
+        } yield response)
+          .catchAll(error => ZIO.succeed(handleForbiddenError(error)))
       }
     },
 
     Method.GET / "chats" / string("chatId") ->
       handler { (chatId: String, req: Request) =>
-        extractBearerToken(req).flatMap(Utils.verifyToken) match {
-          case Some((userId, username)) =>
-            (for {
-              chatWithMessages <- MongoModule.Service.getChatWithMessages(chatId)
-              _ <- if (chatWithMessages.chat.userIds.contains(userId)) ZIO.unit
-              else ZIO.fail(new Exception("Forbidden"))
-              json <- ZIO.attempt(chatWithMessages.toJson)
-            } yield Response.json(json))
-              .catchAll {
-                case _: Exception => ZIO.succeed(Response.text("Forbidden").status(Status.Forbidden))
-                case _ => ZIO.succeed(Response.status(Status.NotFound))
-              }
-          case None =>
-            ZIO.succeed(Response.text("Unauthorized").status(Status.Unauthorized))
+        withAuth(req) { (userId, username) =>
+          (for {
+            chatWithMessages <- MongoModule.Service.getChatWithMessages(chatId)
+            _ <- checkChatAccess(chatWithMessages.chat, userId)
+            response <- jsonResponse(chatWithMessages)
+          } yield response)
+            .catchAll(error => ZIO.succeed(handleNotFoundError(error)))
         }
       }
   )

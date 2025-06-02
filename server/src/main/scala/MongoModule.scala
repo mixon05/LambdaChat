@@ -61,189 +61,183 @@ object MongoModule {
 
   private final case class Live(client: MongoClient) extends Service {
 
-    private def usersCollection: MongoCollection[Document] =
-      client.getDatabase("PF").getCollection("users")
+    private val DATABASE_NAME = "PF"
+    private val USERS_COLLECTION = "users"
+    private val CHATS_COLLECTION = "chats"
+    private val MESSAGES_COLLECTION = "messages"
+    private val DEFAULT_MESSAGE_LIMIT = 50
+    private val SEARCH_LIMIT = 20
 
-    private def chatsCollection: MongoCollection[Document] =
-      client.getDatabase("PF").getCollection("chats")
+    private lazy val database = client.getDatabase(DATABASE_NAME)
+    private lazy val usersCollection: MongoCollection[Document] =
+      database.getCollection(USERS_COLLECTION)
+    private lazy val chatsCollection: MongoCollection[Document] =
+      database.getCollection(CHATS_COLLECTION)
+    private lazy val messagesCollection: MongoCollection[Document] =
+      database.getCollection(MESSAGES_COLLECTION)
 
-    private def messagesCollection: MongoCollection[Document] =
-      client.getDatabase("PF").getCollection("messages")
+    private def documentToUser(doc: Document): User =
+      User(
+        id = doc.getObjectId("_id").toString,
+        username = doc.getString("name")
+      )
 
-    def registerUser(name: String, passwordHash: String): Task[Option[String]] = ZIO.attempt {
-      val query = new Document("name", name)
-      val existing = usersCollection.find(query).first()
-      if (existing != null) {
-        None
-      } else {
-        val doc = new Document("name", name).append("password_hash", passwordHash)
-        usersCollection.insertOne(doc)
-        Some(doc.getObjectId("_id").toString)
+    private def documentToMessage(doc: Document): Message =
+      Message(
+        id = doc.getObjectId("_id").toString,
+        chatId = doc.getString("chatId"),
+        senderId = doc.getString("senderId"),
+        value = doc.getString("value"),
+        timestamp = doc.getLong("timestamp")
+      )
+
+    private def createUserDocument(name: String, passwordHash: String): Document =
+      new Document("name", name).append("password_hash", passwordHash)
+
+    private def currentTimeMillis: Long = java.lang.System.currentTimeMillis()
+
+    private def userExists(name: String): Task[Boolean] =
+      ZIO.attempt {
+        val query = new Document("name", name)
+        usersCollection.find(query).first() != null
       }
-    }
 
-    def loginUser(name: String, passwordHash: String): Task[Option[User]] = ZIO.attempt {
-      val query = new Document("name", name).append("password_hash", passwordHash)
-      val result = usersCollection.find(query).first()
-      if (result != null) {
-        Some(User(
-          id = result.getObjectId("_id").toString,
-          username = result.getString("name")
-        ))
-      } else {
-        None
+    def registerUser(name: String, passwordHash: String): Task[Option[String]] =
+      userExists(name).flatMap {
+        case true => ZIO.succeed(None)
+        case false =>
+          val doc = createUserDocument(name, passwordHash)
+          insertDocumentAndGetId(usersCollection)(doc).map(Some(_))
       }
-    }
 
-    def searchUsers(query: String): Task[List[User]] = ZIO.attempt {
-      val pattern = Pattern.compile(Pattern.quote(query), Pattern.CASE_INSENSITIVE)
-      val filter = Filters.regex("name", pattern)
+    private def findUserByCredentials(name: String, passwordHash: String): Task[Option[Document]] =
+      ZIO.attempt {
+        val query = new Document("name", name).append("password_hash", passwordHash)
+        Option(usersCollection.find(query).first())
+      }
 
-      usersCollection.find(filter)
-        .limit(20)
-        .asScala
-        .map { doc =>
-          User(
-            id = doc.getObjectId("_id").toString,
-            username = doc.getString("name")
-          )
-        }
-        .toList
-    }
+    def loginUser(name: String, passwordHash: String): Task[Option[User]] =
+      findUserByCredentials(name, passwordHash).map(_.map(documentToUser))
 
-    def getUserChats(userId: String): Task[List[Chat]] = ZIO.attempt {
-      val pipeline = List(
-        Aggregates.`match`(Filters.in("userIds", userId)),
+    private def createSearchPattern(query: String): Pattern =
+      Pattern.compile(Pattern.quote(query), Pattern.CASE_INSENSITIVE)
 
+    def searchUsers(query: String): Task[List[User]] =
+      ZIO.attempt {
+        val filter = Filters.regex("name", createSearchPattern(query))
+
+        usersCollection.find(filter)
+          .limit(SEARCH_LIMIT)
+          .asScala
+          .map(documentToUser)
+          .toList
+      }
+
+    private def buildChatPipelineWithUsers(filter: org.bson.conversions.Bson): java.util.List[org.bson.conversions.Bson] =
+      List(
+        Aggregates.`match`(filter),
         Aggregates.lookup(
-          "users",
+          USERS_COLLECTION,
           "userIds",
           "_id",
           "users"
         )
       ).asJava
 
-      chatsCollection.aggregate(pipeline)
-        .asScala
-        .map { doc =>
-          val userIds = doc.getList("userIds", classOf[String]).asScala.toList
-          val userDocs = doc.getList("users", classOf[Document]).asScala.toList
+    private def parseChatAggregationResult(doc: Document): Chat = {
+      val userIds = doc.getList("userIds", classOf[String]).asScala.toList
+      val userDocs = doc.getList("users", classOf[Document]).asScala.toList
+      val users = userDocs.map(documentToUser)
 
-          val users = userDocs.map { userDoc =>
-            User(
-              id = userDoc.getObjectId("_id").toString,
-              username = userDoc.getString("name")
-            )
-          }
-
-          Chat(
-            id = doc.getObjectId("_id").toString,
-            userIds = userIds,
-            users = users
-          )
-        }
-        .toList
+      Chat(
+        id = doc.getObjectId("_id").toString,
+        userIds = userIds,
+        users = users
+      )
     }
 
-    def getChatMessages(chatId: String, limit: Int, offset: Int): Task[List[Message]] = ZIO.attempt {
-      val filter = Filters.eq("chatId", chatId)
+    def getUserChats(userId: String): Task[List[Chat]] =
+      ZIO.attempt {
+        val pipeline = buildChatPipelineWithUsers(Filters.in("userIds", userId))
 
-      messagesCollection.find(filter)
-        .sort(Sorts.descending("timestamp"))
-        .skip(offset)
-        .limit(limit)
-        .asScala
-        .map { doc =>
-          Message(
-            id = doc.getObjectId("_id").toString,
-            chatId = doc.getString("chatId"),
-            senderId = doc.getString("senderId"),
-            value = doc.getString("value"),
-            timestamp = doc.getLong("timestamp")
-          )
-        }
-        .toList
-        .reverse // chronological order
-    }
+        chatsCollection.aggregate(pipeline)
+          .asScala
+          .map(parseChatAggregationResult)
+          .toList
+      }
 
-    def createChat(userIds: List[String]): Task[String] = ZIO.attempt {
+    def getChatMessages(chatId: String, limit: Int, offset: Int): Task[List[Message]] =
+      ZIO.attempt {
+        val filter = Filters.eq("chatId", chatId)
+
+        messagesCollection.find(filter)
+          .sort(Sorts.descending("timestamp"))
+          .skip(offset)
+          .limit(limit)
+          .asScala
+          .map(documentToMessage)
+          .toList
+          .reverse // chronological order
+      }
+
+    private def insertDocumentAndGetId(collection: MongoCollection[Document])(doc: Document): Task[String] =
+      ZIO.attempt {
+        collection.insertOne(doc)
+        doc.getObjectId("_id").toString
+      }
+
+    def createChat(userIds: List[String]): Task[String] = {
       val doc = new Document()
         .append("userIds", userIds.asJava)
-        .append("createdAt", java.lang.System.currentTimeMillis())
+        .append("createdAt", currentTimeMillis)
 
-      chatsCollection.insertOne(doc)
-      doc.getObjectId("_id").toString
+      insertDocumentAndGetId(chatsCollection)(doc)
     }
 
-    def sendMessage(chatId: String, senderId: String, value: String): Task[String] = ZIO.attempt {
+    def sendMessage(chatId: String, senderId: String, value: String): Task[String] = {
       val doc = new Document()
         .append("chatId", chatId)
         .append("senderId", senderId)
         .append("value", value)
-        .append("timestamp", java.lang.System.currentTimeMillis())
+        .append("timestamp", currentTimeMillis)
 
-      messagesCollection.insertOne(doc)
-      doc.getObjectId("_id").toString
+      insertDocumentAndGetId(messagesCollection)(doc)
     }
 
-    def getUsersByIds(userIds: List[String]): Task[List[User]] = ZIO.attempt {
-      if (userIds.isEmpty) {
-        List.empty
-      } else {
-        val objectIds = userIds.map(new ObjectId(_))
-        val filter = Filters.in("_id", objectIds.asJava)
+    def getUsersByIds(userIds: List[String]): Task[List[User]] =
+      ZIO.when(userIds.nonEmpty) {
+        ZIO.attempt {
+          val objectIds = userIds.map(new ObjectId(_))
+          val filter = Filters.in("_id", objectIds.asJava)
 
-        usersCollection.find(filter)
-          .asScala
-          .map { doc =>
-            User(
-              id = doc.getObjectId("_id").toString,
-              username = doc.getString("name")
-            )
-          }
-          .toList
-      }
-    }
-
-    def getChat(chatId: String): Task[Chat] = ZIO.attempt {
-      val pipeline = List(
-        Aggregates.`match`(Filters.eq("_id", new ObjectId(chatId))),
-
-        Aggregates.lookup(
-          "users",
-          "userIds",
-          "_id",
-          "users"
-        )
-      ).asJava
-
-      val result = chatsCollection.aggregate(pipeline).first()
-
-      if (result != null) {
-        val userIds = result.getList("userIds", classOf[String]).asScala.toList
-        val userDocs = result.getList("users", classOf[Document]).asScala.toList
-
-        val users = userDocs.map { userDoc =>
-          User(
-            id = userDoc.getObjectId("_id").toString,
-            username = userDoc.getString("name")
-          )
+          usersCollection.find(filter)
+            .asScala
+            .map(documentToUser)
+            .toList
         }
+      }.map(_.getOrElse(List.empty))
 
-        Chat(
-          id = result.getObjectId("_id").toString,
-          userIds = userIds,
-          users = users
-        )
-      } else {
-        throw new Exception("Chat not found")
-      }
+    def getChat(chatId: String): Task[Chat] = {
+      val tryGetChat = for {
+        objectId <- ZIO.attempt(new ObjectId(chatId))
+          .mapError(e => new IllegalArgumentException(s"Invalid chat ID format: $chatId", e))
+
+        pipeline = buildChatPipelineWithUsers(Filters.eq("_id", objectId))
+
+        result <- ZIO.attempt(Option(chatsCollection.aggregate(pipeline).first()))
+
+        chat <- result match {
+          case Some(doc) => ZIO.succeed(parseChatAggregationResult(doc))
+          case None => ZIO.fail(new NoSuchElementException(s"Chat with ID $chatId not found"))
+        }
+      } yield chat
+
+      tryGetChat
     }
 
-    def getChatWithMessages(chatId: String): Task[ChatWithMessages] = for {
-      chat <- getChat(chatId)
-      messages <- getChatMessages(chatId, 50, 0)
-    } yield ChatWithMessages(chat, messages)
+    def getChatWithMessages(chatId: String): Task[ChatWithMessages] =
+      (getChat(chatId) <&> getChatMessages(chatId, DEFAULT_MESSAGE_LIMIT, 0))
+        .map { case (chat, messages) => ChatWithMessages(chat, messages) }
   }
 
   private val config = ConfigFactory.load()
