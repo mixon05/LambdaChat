@@ -1,5 +1,7 @@
 package webapp
 
+import org.scalajs.dom.html
+import org.scalajs.dom
 import com.raquo.laminar.api.L.*
 import org.scalajs.dom
 import org.scalajs.dom.ext.Ajax
@@ -7,6 +9,7 @@ import scala.scalajs.js
 import scala.scalajs.js.JSON
 import scala.concurrent.ExecutionContext.Implicits.global
 import upickle.default.*
+import scala.util.Try
 
 object ChatPage:
 
@@ -20,23 +23,34 @@ object ChatPage:
     val messageStatus  = Var("")
     val loading        = Var(false)
 
+    def getAuthTokenAndUserId: Option[(String, String)] =
+      Option(dom.window.localStorage.getItem("token"))
+        .zip(Option(dom.window.localStorage.getItem("userId")))
+
+    def renderMessage(msg: Message): Element =
+      val currentUserId = dom.window.localStorage.getItem("userId")
+      val clsName =
+        if msg.senderId == currentUserId then "message-item message-right"
+        else "message-item message-left"
+      li(s"${msg.senderId}: ${msg.value}", cls := clsName)
+
     def fetchMessages(): Unit =
-      val token = dom.window.localStorage.getItem("token")
-      if token == null then
+      getAuthTokenAndUserId.fold {
         messageStatus.set("Not logged in")
-      else
+      } { case (token, userId) =>
         loading.set(true)
         Ajax.get(
           url = s"http://localhost:8080/chats/$chatId/messages",
           headers = Map("Authorization" -> s"Bearer $token")
         ).map { xhr =>
           if xhr.status == 200 then
-            try
-              val msgs = read[List[Message]](xhr.responseText)
-              messages.set(msgs)
-              messageStatus.set("")
-            catch case ex: Throwable =>
-              messageStatus.set(s"Decode error: ${ex.getMessage}")
+            Try(read[List[Message]](xhr.responseText)).fold(
+              ex => messageStatus.set(s"Decode error: ${ex.getMessage}"),
+              msgs => {
+                messages.set(msgs)
+                messageStatus.set("")
+              }
+            )
           else
             messageStatus.set(s"Server error: ${xhr.status}")
         }.recover {
@@ -44,17 +58,13 @@ object ChatPage:
         }.foreach { _ =>
           loading.set(false)
         }
+      }
 
     def sendMessage(): Unit =
-      val token = dom.window.localStorage.getItem("token")
-      val senderId = dom.window.localStorage.getItem("userId")
-      if token == null || senderId == null then
+      getAuthTokenAndUserId.fold {
         messageStatus.set("Not logged in")
-      else
-        val body = s"""{
-                      |  "chatId": "$chatId",
-                      |  "value": "${newMessage.now()}"
-                      |}""".stripMargin
+      } { case (token, senderId) =>
+        val body = write(Map("chatId" -> chatId, "value" -> newMessage.now()))
 
         Ajax.post(
           url = "http://localhost:8080/messages",
@@ -72,8 +82,7 @@ object ChatPage:
         }.recover {
           case _ => messageStatus.set("Network error")
         }
-
-    val currentUserId = dom.window.localStorage.getItem("userId")
+      }
 
     div(
       onMountCallback(_ => fetchMessages()),
@@ -87,12 +96,14 @@ object ChatPage:
         },
         ul(
           cls := "messages-list",
-          children <-- messages.signal.map(_.map { msg =>
-            val clsName =
-              if msg.senderId == currentUserId then "message-item message-right"
-              else "message-item message-left"
-            li(s"${msg.senderId}: ${msg.value}", cls := clsName)
-          })
+          inContext { thisNode =>
+            messages.signal.map { _ =>
+              dom.window.requestAnimationFrame { _ =>
+                thisNode.ref.scrollTop = thisNode.ref.scrollHeight
+              }
+            } --> Observer.empty
+          },
+          children <-- messages.signal.map(_.map(renderMessage))
         )
       ),
       form(
