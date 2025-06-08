@@ -168,16 +168,36 @@ object MongoModule {
 
     def getChatMessages(chatId: String, limit: Int, offset: Int): Task[List[Message]] =
       ZIO.attempt {
-        val filter = Filters.eq("chatId", chatId)
+        val pipeline = List(
+          Aggregates.`match`(Filters.eq("chatId", chatId)),
+          Aggregates.sort(Sorts.descending("timestamp")),
+          Aggregates.skip(offset),
+          Aggregates.limit(limit),
+          Aggregates.lookup(
+            USERS_COLLECTION,
+            "senderId",
+            "_id",
+            "senderInfo"
+          )
+        ).asJava
 
-        messagesCollection.find(filter)
-          .sort(Sorts.descending("timestamp"))
-          .skip(offset)
-          .limit(limit)
+        messagesCollection.aggregate(pipeline)
           .asScala
-          .map(documentToMessage)
+          .map { doc =>
+            val senderDocs = doc.getList("senderInfo", classOf[Document]).asScala
+            val sender = senderDocs.headOption.map(documentToUser)
+
+            Message(
+              id = doc.getObjectId("_id").toString,
+              chatId = doc.getString("chatId"),
+              senderId = doc.getString("senderId"),
+              value = doc.getString("value"),
+              timestamp = doc.getLong("timestamp"),
+              sender = sender
+            )
+          }
           .toList
-          .reverse // chronological order
+          .reverse
       }
 
     private def insertDocumentAndGetId(collection: MongoCollection[Document])(doc: Document): Task[String] =
