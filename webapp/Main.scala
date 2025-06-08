@@ -5,12 +5,18 @@ import org.scalajs.dom
 
 @main
 def LiveApp(): Unit =
+  dom.window.onpopstate = _ => Main.updatePageFromLocation()
   renderOnDomContentLoaded(
     dom.document.getElementById("app"),
     Main.view()
   )
 
+
 object Main:
+
+  def navigateTo(path: String): Unit =
+    dom.window.history.pushState(null, "", path)
+    updatePageFromLocation()
 
   def extractInitialPage(): String =
     dom.window.location.pathname match
@@ -21,6 +27,10 @@ object Main:
       case "/chats"               => "chats"
       case path if path.startsWith("/chat/") => "chat"
       case _                      => "404"
+
+  def updatePageFromLocation(): Unit =
+    currentPage.set(extractInitialPage())
+    currentChatId.set(extractChatIdFromPath())
 
   def extractChatIdFromPath(): Option[String] =
     dom.window.location.pathname.stripPrefix("/").split("/").toList match
@@ -54,14 +64,14 @@ object Main:
   def navBar(currentPage: Var[String], maybeUser: Signal[Option[String]]): Element =
     htmlTag("nav")(
       cls := "navbar",
-      button("Home", onClick.mapTo("home") --> currentPage),
-      button("Users", onClick.mapTo("users") --> currentPage),
-      button("Chats", onClick.mapTo("chats") --> currentPage),
+      button("Home", onClick --> (_ => navigateTo("/"))),
+      button("Users", onClick --> (_ => navigateTo("/users"))),
+      button("Chats", onClick --> (_ => navigateTo("/chats"))),
       child <-- maybeUser.map {
         case Some(name) =>
-          button(s"$name", onClick.mapTo("profile") --> currentPage)
+          button(name, onClick --> (_ => navigateTo("/profile")))
         case None =>
-          button("Login/Register", onClick.mapTo("auth") --> currentPage)
+          button("Login/Register", onClick --> (_ => navigateTo("/auth")))
       }
     )
 

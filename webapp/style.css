@@ -1,9 +1,16 @@
 .navbar {
-  display: flex;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 50px;
   gap: 1rem;
   background: #222;
   padding: 1rem;
+  z-index: 1000;
 }
+
+
 .navbar button {
   color: white;
   background: transparent;
@@ -75,4 +82,51 @@
   margin-top: 1rem;
   font-size: 0.95rem;
   color: #333;
+}
+
+.chat-list-container {
+  padding: 20px;
+  font-family: sans-serif;
+}
+
+.refresh-button {
+  margin-bottom: 10px;
+  padding: 8px 16px;
+}
+
+.spinner {
+  font-style: italic;
+  margin: 10px 0;
+}
+
+.chat-message {
+  color: red;
+  margin-bottom: 10px;
+}
+
+.chat-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.chat-item {
+  margin-bottom: 10px;
+}
+
+.chat-link-button {
+  padding: 8px 12px;
+  background-color: #e6f0ff;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.chat-link-button:hover {
+  background-color: #cce0ff;
+}
+
+.empty-message {
+  color: #888;
+  font-style: italic;
 }

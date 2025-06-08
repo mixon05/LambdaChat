@@ -15,15 +15,17 @@ object ChatPage:
     implicit val rw: ReadWriter[Message] = macroRW
 
   def apply(chatId: String): Element =
-    val messages = Var(List.empty[Message])
-    val newMessage = Var("")
-    val messageStatus = Var("")
+    val messages       = Var(List.empty[Message])
+    val newMessage     = Var("")
+    val messageStatus  = Var("")
+    val loading        = Var(false)
 
     def fetchMessages(): Unit =
       val token = dom.window.localStorage.getItem("token")
       if token == null then
         messageStatus.set("Not logged in")
       else
+        loading.set(true)
         Ajax.get(
           url = s"http://localhost:8080/chats/$chatId/messages",
           headers = Map("Authorization" -> s"Bearer $token")
@@ -32,13 +34,16 @@ object ChatPage:
             try
               val msgs = read[List[Message]](xhr.responseText)
               messages.set(msgs)
+              messageStatus.set("")
             catch case ex: Throwable =>
               messageStatus.set(s"Decode error: ${ex.getMessage}")
           else
             messageStatus.set(s"Server error: ${xhr.status}")
-        }.recover { case _ => messageStatus.set("Network error") }
-
-    fetchMessages();
+        }.recover {
+          case _ => messageStatus.set("Network error")
+        }.foreach { _ =>
+          loading.set(false)
+        }
 
     def sendMessage(): Unit =
       val token = dom.window.localStorage.getItem("token")
@@ -47,8 +52,8 @@ object ChatPage:
         messageStatus.set("Not logged in")
       else
         val body = s"""{
-                      |  \"chatId\": \"$chatId\",
-                      |  \"value\": \"${newMessage.now()}\"
+                      |  "chatId": "$chatId",
+                      |  "value": "${newMessage.now()}"
                       |}""".stripMargin
 
         Ajax.post(
@@ -68,26 +73,39 @@ object ChatPage:
           case _ => messageStatus.set("Network error")
         }
 
-    //onMountCallback(_ => fetchMessages())
+    val currentUserId = dom.window.localStorage.getItem("userId")
 
     div(
-      h2(s"Chat: $chatId"),
-      ul(
-        children <-- messages.signal.map(_.map { msg =>
-          li(s"${msg.senderId}: ${msg.value}")
-        })
+      onMountCallback(_ => fetchMessages()),
+      cls := "chat-container",
+      div(cls := "chat-header", h2(s"Chat: $chatId")),
+      div(
+        cls := "messages-section",
+        child.maybe <-- loading.signal.map {
+          case true  => Some(div(cls := "spinner", "Loading..."))
+          case false => None
+        },
+        ul(
+          cls := "messages-list",
+          children <-- messages.signal.map(_.map { msg =>
+            val clsName =
+              if msg.senderId == currentUserId then "message-item message-right"
+              else "message-item message-left"
+            li(s"${msg.senderId}: ${msg.value}", cls := clsName)
+          })
+        )
       ),
       form(
+        cls := "message-form",
         onSubmit.preventDefault --> { _ => sendMessage() },
         input(
+          cls := "message-input",
+          placeholder := "Type a message...",
           controlled(
             value <-- newMessage,
             onInput.mapToValue --> newMessage
-          ),
-          placeholder := "Type a message...",
-          cls := "message-input"
+          )
         ),
-        button("Send", tpe := "submit")
-      ),
-      div(cls := "message-status", child.text <-- messageStatus.signal)
+        button("Send", tpe := "submit", cls := "send-button")
+      )
     )
