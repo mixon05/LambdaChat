@@ -20,7 +20,8 @@ case class Message(
                     chatId: String,
                     senderId: String,
                     value: String,
-                    timestamp: Long
+                    timestamp: Long,
+                    sender: Option[User] = None
                   )
 object Message {
   implicit val codec: JsonCodec[Message] = DeriveJsonCodec.gen[Message]
