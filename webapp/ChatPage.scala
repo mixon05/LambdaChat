@@ -20,10 +20,15 @@ object ChatPage:
   object Message:
     implicit val rw: ReadWriter[Message] = macroRW
 
+  case class Chat(id: String, userIds: List[String], userNames: List[String])
+
+  object Chat {
+    implicit val rw: ReadWriter[Chat] = macroRW
+  }
+
   def formatTimestamp(timestamp: Long): String = {
     val date = new js.Date(timestamp.toDouble)
 
-    // Convert the Double to an Int before formatting
     val hours = date.getHours().toInt
     val minutes = date.getMinutes().toInt
 
@@ -38,12 +43,39 @@ object ChatPage:
     val newMessage     = Var("")
     val messageStatus  = Var("")
     val loading        = Var(false)
+    val chat           = Var(Option.empty[Chat])
 
     def getAuthTokenAndUserId: Option[(String, String)] =
       Option(dom.window.localStorage.getItem("token"))
         .zip(Option(dom.window.localStorage.getItem("userId")))
 
-    // Correct
+    def fetchChatInfo(): Unit =
+      getAuthTokenAndUserId.fold {
+        messageStatus.set("Not logged in")
+      } { case (token, userId) =>
+        Ajax.get(
+          url = s"http://localhost:8080/users/$userId/chats",
+          headers = Map("Authorization" -> s"Bearer $token")
+        ).map { xhr =>
+          if xhr.status == 200 then
+            Try(read[List[Chat]](xhr.responseText)).fold(
+              ex => messageStatus.set(s"Chat list decode error: ${ex.getMessage}"),
+              chats => {
+                chats.find(_.id == chatId) match {
+                  case Some(foundChat) =>
+                    chat.set(Some(foundChat))
+                  case None =>
+                    messageStatus.set("Chat not found in user's chat list")
+                }
+              }
+            )
+          else
+            messageStatus.set(s"Failed to fetch chat list: ${xhr.status}")
+        }.recover {
+          case _ => messageStatus.set("Network error during chat fetch")
+        }
+      }
+
     def renderMessage(msg: Message): Element =
       val currentUserId = dom.window.localStorage.getItem("userId")
       val clsName =
@@ -53,8 +85,7 @@ object ChatPage:
       val timeStr = formatTimestamp(msg.timestamp)
 
       li(
-        cls := clsName, // Pass cls as the first argument
-        // Pass the child divs as subsequent arguments, separated by commas
+        cls := clsName,
         div(cls := "message-content", s"${msg.senderUsername}: ${msg.value}"),
         div(cls := "message-time", timeStr)
       )
@@ -111,19 +142,30 @@ object ChatPage:
 
     div(
       onMountCallback { _ =>
+        fetchChatInfo()
         fetchMessages()
         setInterval(1000) {
           fetchMessages()
         }
       },
       cls := "chat-container",
-      div(cls := "chat-header", h2(s"Chat: $chatId")),
+      div(
+        cls := "chat-header",
+        child.maybe <-- chat.signal.map {
+          case Some(ch) if ch.userNames.nonEmpty =>
+            Some(h2(s"Chat with: ${ch.userNames.drop(1).mkString(", ")}"))
+          case Some(_) =>
+            Some(h2("Chat"))
+          case None =>
+            Some(h2("Loading chat..."))
+        },
+        child.maybe <-- messageStatus.signal.map {
+          case ""  => None
+          case msg => Some(div(cls := "chat-error", msg))
+        }
+      ),
       div(
         cls := "messages-section",
-        /*child.maybe <-- loading.signal.map {
-          case true  => Some(div(cls := "spinner", "Loading..."))
-          case false => None
-        },*/
         ul(
           cls := "messages-list",
           inContext { thisNode =>
