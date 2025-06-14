@@ -130,3 +130,15 @@
   color: #888;
   font-style: italic;
 }
+
+.message-item {
+  display: flex;
+  flex-direction: column;
+  margin: 4px 0;
+}
+
+.message-time {
+  font-size: 0.75rem;
+  color: gray;
+  align-self: flex-end;
+}

@@ -1,5 +1,6 @@
 package webapp
 
+import scala.scalajs.js
 import org.scalajs.dom.html
 import org.scalajs.dom
 import com.raquo.laminar.api.L.*
@@ -10,12 +11,27 @@ import scala.scalajs.js.JSON
 import scala.concurrent.ExecutionContext.Implicits.global
 import upickle.default.*
 import scala.util.Try
+import scala.scalajs.js.timers.setInterval
+
 
 object ChatPage:
 
-  case class Message(id: String, chatId: String, senderId: String, value: String)
+  case class Message(id: String, chatId: String, senderId: String, value: String, timestamp: Long)
   object Message:
     implicit val rw: ReadWriter[Message] = macroRW
+
+  def formatTimestamp(timestamp: Long): String = {
+    val date = new js.Date(timestamp.toDouble)
+
+    // Convert the Double to an Int before formatting
+    val hours = date.getHours().toInt
+    val minutes = date.getMinutes().toInt
+
+    val formattedHours = f"$hours%02d"
+    val formattedMinutes = f"$minutes%02d"
+
+    s"$formattedHours:$formattedMinutes"
+  }
 
   def apply(chatId: String): Element =
     val messages       = Var(List.empty[Message])
@@ -27,12 +43,21 @@ object ChatPage:
       Option(dom.window.localStorage.getItem("token"))
         .zip(Option(dom.window.localStorage.getItem("userId")))
 
+    // Correct
     def renderMessage(msg: Message): Element =
       val currentUserId = dom.window.localStorage.getItem("userId")
       val clsName =
         if msg.senderId == currentUserId then "message-item message-right"
         else "message-item message-left"
-      li(s"${msg.senderId}: ${msg.value}", cls := clsName)
+
+      val timeStr = formatTimestamp(msg.timestamp)
+
+      li(
+        cls := clsName, // Pass cls as the first argument
+        // Pass the child divs as subsequent arguments, separated by commas
+        div(cls := "message-content", s"${msg.senderId}: ${msg.value}"),
+        div(cls := "message-time", timeStr)
+      )
 
     def fetchMessages(): Unit =
       getAuthTokenAndUserId.fold {
@@ -85,15 +110,20 @@ object ChatPage:
       }
 
     div(
-      onMountCallback(_ => fetchMessages()),
+      onMountCallback { _ =>
+        fetchMessages()
+        setInterval(1000) {
+          fetchMessages()
+        }
+      },
       cls := "chat-container",
       div(cls := "chat-header", h2(s"Chat: $chatId")),
       div(
         cls := "messages-section",
-        child.maybe <-- loading.signal.map {
+        /*child.maybe <-- loading.signal.map {
           case true  => Some(div(cls := "spinner", "Loading..."))
           case false => None
-        },
+        },*/
         ul(
           cls := "messages-list",
           inContext { thisNode =>
