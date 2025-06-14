@@ -16,7 +16,7 @@ import scala.scalajs.js.timers.setInterval
 
 object ChatPage:
 
-  case class Message(id: String, chatId: String, senderId: String, value: String, timestamp: Long)
+  case class Message(id: String, chatId: String, senderId: String, senderUsername: String, value: String, timestamp: Long)
   object Message:
     implicit val rw: ReadWriter[Message] = macroRW
 
@@ -55,7 +55,7 @@ object ChatPage:
       li(
         cls := clsName, // Pass cls as the first argument
         // Pass the child divs as subsequent arguments, separated by commas
-        div(cls := "message-content", s"${msg.senderId}: ${msg.value}"),
+        div(cls := "message-content", s"${msg.senderUsername}: ${msg.value}"),
         div(cls := "message-time", timeStr)
       )
 

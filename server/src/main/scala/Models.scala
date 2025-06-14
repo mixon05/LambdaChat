@@ -19,6 +19,7 @@ case class Message(
                     id: String,
                     chatId: String,
                     senderId: String,
+                    senderUsername: String,
                     value: String,
                     timestamp: Long,
                     sender: Option[User] = None

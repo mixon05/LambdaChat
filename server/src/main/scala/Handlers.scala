@@ -148,7 +148,7 @@ object Handlers {
           request <- parseBody[SendMessageRequest](req)
           chat <- MongoModule.Service.getChat(request.chatId)
           _ <- checkChatAccess(chat, userId)
-          messageId <- MongoModule.Service.sendMessage(request.chatId, userId, request.value)
+          messageId <- MongoModule.Service.sendMessage(request.chatId, userId, username, request.value)
           response <- jsonResponse(Map("messageId" -> messageId))
         } yield response)
           .catchAll(error => ZIO.succeed(handleForbiddenError(error)))

@@ -18,7 +18,7 @@ object MongoModule {
     def getUserChats(userId: String): Task[List[Chat]]
     def getChatMessages(chatId: String, limit: Int, offset: Int): Task[List[Message]]
     def createChat(userIds: List[String]): Task[String]
-    def sendMessage(chatId: String, senderId: String, value: String): Task[String]
+    def sendMessage(chatId: String, senderId: String, senderUsername: String, value: String): Task[String]
     def getChatWithMessages(chatId: String): Task[ChatWithMessages]
     def getChat(chatId: String): Task[Chat]
     def getUsersByIds(userIds: List[String]): Task[List[User]]
@@ -46,8 +46,8 @@ object MongoModule {
     def createChat(userIds: List[String]): ZIO[Service, Throwable, String] =
       ZIO.serviceWithZIO[Service](_.createChat(userIds))
 
-    def sendMessage(chatId: String, senderId: String, value: String): ZIO[Service, Throwable, String] =
-      ZIO.serviceWithZIO[Service](_.sendMessage(chatId, senderId, value))
+    def sendMessage(chatId: String, senderId: String, senderUsername: String, value: String): ZIO[Service, Throwable, String] =
+      ZIO.serviceWithZIO[Service](_.sendMessage(chatId, senderId, senderUsername, value))
 
     def getChatWithMessages(chatId: String): ZIO[Service, Throwable, ChatWithMessages] =
       ZIO.serviceWithZIO[Service](_.getChatWithMessages(chatId))
@@ -83,10 +83,12 @@ object MongoModule {
       )
 
     private def documentToMessage(doc: Document): Message =
+      val senderUsername = Option(doc.getString("senderUsername")).getOrElse("") // Bezpieczne pobranie
       Message(
         id = doc.getObjectId("_id").toString,
         chatId = doc.getString("chatId"),
         senderId = doc.getString("senderId"),
+        senderUsername = senderUsername,
         value = doc.getString("value"),
         timestamp = doc.getLong("timestamp")
       )
@@ -187,10 +189,15 @@ object MongoModule {
             val senderDocs = doc.getList("senderInfo", classOf[Document]).asScala
             val sender = senderDocs.headOption.map(documentToUser)
 
+            val finalSenderUsername = sender.map(_.username)
+              .orElse(Option(doc.getString("senderUsername")))
+              .getOrElse("NN")
+
             Message(
               id = doc.getObjectId("_id").toString,
               chatId = doc.getString("chatId"),
               senderId = doc.getString("senderId"),
+              senderUsername = finalSenderUsername,
               value = doc.getString("value"),
               timestamp = doc.getLong("timestamp"),
               sender = sender
@@ -214,10 +221,11 @@ object MongoModule {
       insertDocumentAndGetId(chatsCollection)(doc)
     }
 
-    def sendMessage(chatId: String, senderId: String, value: String): Task[String] = {
+    def sendMessage(chatId: String, senderId: String, senderUsername: String, value: String): Task[String] = {
       val doc = new Document()
         .append("chatId", chatId)
         .append("senderId", senderId)
+        .append("senderUsername", senderUsername)
         .append("value", value)
         .append("timestamp", currentTimeMillis)
 
