@@ -142,3 +142,32 @@
   color: gray;
   align-self: flex-end;
 }
+
+.message-form {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.like-button {
+  background: none;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 20px;
+  transition: background-color 0.2s;
+}
+
+.like-button:hover {
+  background-color: #f0f0f0;
+}
+
+.emoji-only {
+  background: none !important;
+  padding: 5px !important;
+}
+
+.message-input {
+  flex: 1;
+}
