@@ -8,7 +8,7 @@ import upickle.default.*
 
 object ChatList:
 
-  case class Chat(id: String, userIds: List[String])
+  case class Chat(id: String, userIds: List[String], userNames: List[String])
   object Chat {
     implicit val rw: ReadWriter[Chat] = macroRW
   }
@@ -24,7 +24,7 @@ object ChatList:
         button(
           cls := "chat-link-button",
           onClick --> { _ => Main.navigateTo(s"/chat/${chat.id}") },
-          s"Chat with: ${chat.userIds.drop(1).mkString(", ")}"
+          s"Chat with: ${chat.userNames.drop(1).mkString(", ")}"
         )
       )
 

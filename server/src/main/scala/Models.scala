@@ -31,6 +31,7 @@ object Message {
 case class Chat(
                  id: String,
                  userIds: List[String],
+                 userNames: List[String],
                  users: List[User]
                )
 object Chat {

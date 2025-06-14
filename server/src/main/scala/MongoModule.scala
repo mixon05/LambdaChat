@@ -148,12 +148,18 @@ object MongoModule {
 
     private def parseChatAggregationResult(doc: Document): Chat = {
       val userIds = doc.getList("userIds", classOf[String]).asScala.toList
-      val userDocs = doc.getList("users", classOf[Document]).asScala.toList
+      val userNames = Option(doc.getList("userNames", classOf[String]))
+        .map(_.asScala.toList)
+        .getOrElse(Nil)
+      val userDocs = Option(doc.getList("users", classOf[Document])).map(_.asScala.toList).getOrElse(Nil)
       val users = userDocs.map(documentToUser)
+
+      val finalUserNames = if (userNames.nonEmpty) userNames else users.map(_.username)
 
       Chat(
         id = doc.getObjectId("_id").toString,
         userIds = userIds,
+        userNames = finalUserNames,
         users = users
       )
     }
@@ -214,11 +220,15 @@ object MongoModule {
       }
 
     def createChat(userIds: List[String]): Task[String] = {
-      val doc = new Document()
-        .append("userIds", userIds.asJava)
-        .append("createdAt", currentTimeMillis)
-
-      insertDocumentAndGetId(chatsCollection)(doc)
+      for {
+        users <- getUsersByIds(userIds)
+        userNames = users.map(_.username)
+        doc = new Document()
+          .append("userIds", userIds.asJava)
+          .append("userNames", userNames.asJava)
+          .append("createdAt", currentTimeMillis)
+        id <- insertDocumentAndGetId(chatsCollection)(doc)
+      } yield id
     }
 
     def sendMessage(chatId: String, senderId: String, senderUsername: String, value: String): Task[String] = {
