@@ -7,7 +7,6 @@ import upickle.default.*
 import scala.scalajs.js.URIUtils
 import scala.scalajs.js
 import scala.concurrent.ExecutionContext.Implicits.global
-
 import scala.util.Try
 
 object UserSearch:
@@ -23,10 +22,11 @@ object UserSearch:
   }
 
   def apply(): Element =
-    val query    = Var("")
-    val results  = Var(List.empty[User])
-    val message  = Var("")
-    val loading  = Var(false)
+    val query     = Var("")
+    val results   = Var(List.empty[User])
+    val message   = Var("")
+    val loading   = Var(false)
+    val selected  = Var(Set.empty[User])
 
     def getTokenAndUserId: Option[(String, String)] =
       Option(dom.window.localStorage.getItem("token"))
@@ -58,7 +58,20 @@ object UserSearch:
           loading.set(false)
         }
 
+    def toggleUserSelection(user: User): Unit =
+      val current = selected.now()
+      if current.contains(user) then selected.set(current - user)
+      else selected.set(current + user)
+
     def createChatWith(user: User): Unit =
+      createChat(List(user.id))
+
+    def createGroupChat(): Unit =
+      val userIds = selected.now().map(_.id).toList
+      if userIds.nonEmpty then
+        createChat(userIds)
+
+    def createChat(userIds: List[String]): Unit =
       getTokenAndUserId.fold {
         message.set("Not logged in")
       } { case (token, userId) =>
@@ -70,11 +83,12 @@ object UserSearch:
           if xhr.status == 200 then
             try
               val chats = read[List[Chat]](xhr.responseText)
-              chats.find(_.userIds.contains(user.id)) match
+              val matched = chats.find(chat => userIds.toSet.subsetOf(chat.userIds.toSet) && chat.userIds.toSet.subsetOf(userIds.toSet + userId))
+              matched match
                 case Some(existingChat) =>
                   Main.navigateTo(s"/chat/${existingChat.id}")
                 case None =>
-                  val json = s"""{"userIds": ["${user.id}"]}"""
+                  val json = write(Map("userIds" -> userIds))
                   Ajax.post(
                     url = "http://localhost:8080/chats",
                     data = json,
@@ -138,11 +152,21 @@ object UserSearch:
         cls := "user-list",
         children <-- results.signal.map(_.map { user =>
           li(
-            user.username,
-            onClick --> { _ => createChatWith(user) },
-            cls := "user-item"
+            cls := "user-item",
+            onClick --> { _ => toggleUserSelection(user) },
+            child <-- selected.signal.map(sel =>
+              if sel.contains(user) then b(user.username)
+              else span(user.username)
+            ),
+            button("Chat", onClick.stopPropagation.mapTo(user) --> { u => createChatWith(u) })
           )
         })
+      ),
+      button(
+        "Create Group Chat",
+        cls := "group-chat-button",
+        onClick --> { _ => createGroupChat() },
+        disabled <-- selected.signal.map(_.isEmpty)
       ),
       renderError(message.signal)
     )

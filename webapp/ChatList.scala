@@ -24,7 +24,7 @@ object ChatList:
         button(
           cls := "chat-link-button",
           onClick --> { _ => Main.navigateTo(s"/chat/${chat.id}") },
-          s"Chat with: ${chat.userNames.drop(1).mkString(", ")}"
+          s"Chat with: ${chat.userNames.mkString(", ")}"
         )
       )
 
